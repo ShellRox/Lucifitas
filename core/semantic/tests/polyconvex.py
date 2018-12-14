@@ -27,7 +27,9 @@ Unit tests for core/semantic/polyconvex.py algorithm
 """
 import unittest
 import numpy as np
-from core.semantic.polyconvex import Manager
+from core.semantic.polyconvex import Manager, Query
+from core.semantic.sequential import Sequential
+import time
 
 
 class TestPartitionManager(unittest.TestCase):
@@ -45,8 +47,27 @@ class TestPartitionManager(unittest.TestCase):
     def test_random_forest(self):
         vector_space = np.asarray([np.random.rand(512, 1) for _ in range(0, 100)])
         manager = Manager(vector_space)
+        tm = time.time()
         manager.create_forest()
+        print("\nIndexing partition forest took {0}s ({1}, {2}, {3}, {4}, {5})\n".format(round(time.time() - tm, 2),
+                                                                                         vector_space.size,
+                                                                                         manager.tree_count,
+                                                                                         manager.split_ratio,
+                                                                                         manager.capacity,
+                                                                                         manager.indices))
         self.assertTrue(len(manager.random_forest), manager.tree_count)  # Forest must be the size of tree_count
+
+    def test_query(self):
+        vector_space = np.asarray([np.random.rand(512, 1) for _ in range(0, 500)])
+        query_vector = np.random.rand(512, 1)
+        manager = Manager(vector_space)
+        manager.create_forest()
+        polyhedral_query = Query()
+        polyhedral_query.import_data_by_array(manager.random_forest)
+        sequential_query = Sequential(vector_space)
+        sequential_results = sequential_query.query(query_vector)[0]
+        polyhedral_results = polyhedral_query.query(query_vector)
+        self.assertTrue(sequential_results[0] in polyhedral_results)
 
 
 if __name__ == '__main__':

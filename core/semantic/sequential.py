@@ -20,20 +20,32 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Sequential nearest-neighbour query function which is suboptimal in practice
+but consequentially useful to test more optimal query functions.
 """
+import numpy as np
+from errors import SequentialError
 
 
-class TreeError(Exception):
-    pass
+class Sequential(object):
+    """
+    Input variables:
+    vector_space - n-dimensional vector space in the form of Numpy array
+    """
+    def __init__(self, vector_space):
+        self.vector_space = vector_space
 
+    def query(self, query_vector):
+        most_similar = ([], 0)
+        for v in self.vector_space:
+            similarity = np.linalg.norm(query_vector.ravel()) - np.linalg.norm(v.ravel())
+            if similarity > most_similar[1]:
+                most_similar = (v, similarity)
+        return most_similar
 
-class ManagerError(Exception):
-    pass
-
-
-class QueryError(Exception):
-    pass
-
-
-class SequentialError(Exception):
-    pass
+    def check_variables(self):
+        if not isinstance(self.vector_space, np.ndarray):
+            return SequentialError("vector space must be in the form of Numpy array")
