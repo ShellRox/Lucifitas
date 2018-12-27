@@ -29,10 +29,9 @@ Algorithm for dividing high-dimensional vector space into non-overlapping cells
 of hyper convex-polyhedrons bounded by hyper-planes using random binary partitioning
 technique.
 """
-from __future__ import division
+from __future__ import division  # Python 2
 from errors import TreeError, ManagerError, QueryError
 import numpy as np
-import random
 import os
 import pickle
 import time
@@ -45,33 +44,49 @@ class PartitionTree(object):
         node_array - array containing all types of nodes (root, internal and leaf respectively)
         """
         self.root_node = None
-        self.node_array = []
+        self.node_array = {}
 
-    def add_node(self, tree_node):
+    def set_node_array(self, node_array):
+        if isinstance(node_array, dict):
+            if all([isinstance(node[0], InternalNode) or isinstance(node[0], RootNode) for node in node_array.values()]):
+                if not isinstance(node_array.get(0, [InternalNode])[0], RootNode):
+                    raise TreeError("node_array must contain RootNode as its first element")
+                else:
+                    self.root_node = node_array[0]
+                    self.node_array = node_array
+            else:
+                raise TreeError("node_array dictionary objects shall only contain InternalNode and RootNode values")
+        else:
+            raise TreeError("node_array must be a dict object")
+
+    def add_node(self, tree_node):  # Negligible for current version, but might be helpful in the future
         if isinstance(tree_node, RootNode):
             if not self.root_node:  # Root node must obviously be the first node
                 self.root_node = tree_node
-                self.node_array.append(self.root_node)
+                self.node_array.__setitem__(0, self.root_node)
             else:
-                self.node_array.remove(self.root_node)
+                self.node_array.__delitem__(0)
                 self.root_node = tree_node
-                self.node_array.append(self.root_node)
+                self.node_array.__setitem__(0, self.root_node)
         elif isinstance(tree_node, InternalNode):
             if not self.root_node:
                 raise TreeError("RootNode instance must be added first")
             else:
-                self.node_array.append(tree_node)
+                self.node_array.__setitem__(len(self.node_array) - 1, tree_node)
         else:
             raise TreeError("input must be InternalNode or RootNode instance")
 
     def remove_node(self, tree_node):  # Negligible for current version, but might be helpful in the future
-        if tree_node in self.node_array:
-            self.node_array.remove(tree_node)
+        if tree_node in self.node_array.values():
+            self.node_array.__delitem__(self.node_array.values().index(tree_node))
         else:
             raise TreeError("input must be present in node_array")
 
     def list_all(self):
-        return self.node_array
+        all_nodes = []
+        for node in self.node_array.values():
+            all_nodes.extend(node)
+        return all_nodes
 
     def show_root(self):
         if not self.root_node:
@@ -79,11 +94,29 @@ class PartitionTree(object):
         else:
             return self.root_node
 
+    def show_depth(self):  # maximum depth of partition tree
+        return len(self.node_array)
+
     def list_internal(self):
-        return [node for node in self.node_array if isinstance(node, InternalNode)]
+        return [node for node in self.list_all() if isinstance(node, InternalNode)]
 
     def list_leaves(self):
         return [node for node in self.list_internal() if node.is_leaf()]
+
+    def total_nodes(self):
+        return len(self.list_all())
+
+    def left_child_percentage(self):  # TODO: fix
+        left_nodes = [node for node in self.list_internal() if node.order == -1 and not node.is_leaf()]
+        return (len(left_nodes)/(self.total_nodes() - 1)) * 100
+
+    def right_child_percentage(self):
+        right_nodes = [node for node in self.list_internal() if node.order == 1 and not node.is_leaf()]
+        return (len(right_nodes)/(self.total_nodes() - 1)) * 100
+
+    def leaf_node_percentage(self):
+        leaf_nodes = self.list_leaves()
+        return (len(leaf_nodes))/(self.total_nodes() - 1) * 100
 
 
 class RootNode(object):
@@ -99,12 +132,16 @@ class RootNode(object):
         self.capacity = capacity
         self.ratio = ratio
         self.indices = indices
-        self.node_position = [0]
-        self.percentiles = []
-        self.check_variables()
+        self.children = ()
+        self.order = 0
+        self.percentile = 0
+        # self.check_variables()
 
     def show_space(self):
         return self.space
+
+    def list_points(self):  # Linker of self.show_space
+        return self.show_space()
 
     def cell_count(self):
         return len(self.space)
@@ -113,16 +150,21 @@ class RootNode(object):
         if not isinstance(self.space, np.ndarray):
             raise TreeError("vector space must be in the form of Numpy array")
 
+    def add_children(self, left, right):
+        self.children = (left, right)
+
+    def set_percentile(self):  # TODO: make this function even faster
+        scale_values = [np.inner(self.random_coefficients(), point[:self.indices].ravel()) for point in self.space]
+        percentile = np.percentile(scale_values, self.ratio * 100)
+        self.percentile = percentile
+        return True
+
     @staticmethod
     def is_leaf():
         return False
 
     def random_test(self, main_point):
-        scale_values = np.array(sorted([np.inner(self.random_coefficients(), point[:self.indices].ravel())
-                                        for point in self.space]))
-        percentile = random.choice([np.percentile(scale_values, 100 * self.ratio),
-                                    np.percentile(scale_values, 100 * (1 - self.ratio))])
-        self.percentiles.append(percentile)
+        percentile = self.ratio
         main_term = np.inner(main_point[:self.indices].ravel(), self.random_coefficients())
         if (main_term - percentile) >= 0:  # Hyper-plane equation defined in the document
             return -1  # Next node is the left child
@@ -130,11 +172,11 @@ class RootNode(object):
             return 1  # Next node is the right child
 
     def random_coefficients(self):
-        return np.random.randint(2, size=self.indices)
+        return np.random.uniform(size=self.indices)
 
 
 class InternalNode(object):
-    def __init__(self, capacity, ratio, indices, position):
+    def __init__(self, capacity, ratio, indices, parent, order):
         """
         Input variables:
         split_ratio - balance variable of a tree from least (0) to most (1/2)
@@ -146,48 +188,44 @@ class InternalNode(object):
         self.capacity = capacity
         self.ratio = ratio
         self.indices = indices
-        self.node_position = position
-        self.random_test_biases = []
+        self.parent = parent
+        self.children = ()
+        self.percentile = 0
+        self.order = order
         self.check_variables()
 
     def add_point(self, point):
         self.points.append(point)
-        self.check_variables()
+        # self.check_variables()
+
+    def add_children(self, left, right):
+        self.children = (left, right)
 
     def list_points(self):
         return self.points
 
     def is_leaf(self):
-        """
-        TODO: Fix the capacity of a leaf node, leaf node should always contain between R*C to C points, but
-        TODO: the point will never reach the leaf node in that case, since for a node to be leaf, above conditions
-        TODO: must be met, which seems impossible...
-        print((self.ratio * self.capacity) < self.cell_count() <= self.capacity, (self.ratio * self.capacity),
-              self.cell_count(), self.capacity)
-        return (self.ratio * self.capacity) < self.cell_count() <= self.capacity
-        """
-        return 0 < self.cell_count() <= self.capacity
+        return self.cell_count() <= self.capacity
 
     def cell_count(self):
         return len(self.points)
 
     def random_test(self, main_point):
-        scale_values = np.array(sorted([np.inner(self.random_coefficients(), point[:self.indices].ravel())
-                                        for point in self.points]))
-        percentile = random.choice([np.percentile(scale_values, 100 * self.ratio),  # Just as described on Section 3.1
-                                    np.percentile(scale_values, 100 * (1 - self.ratio))])
-        self.random_test_biases.append(percentile)
+        percentile = self.percentile
         main_term = np.inner(main_point[:self.indices].ravel(), self.random_coefficients())
-        if self.is_leaf():
-            return 0  # Next node is the center leaf child
+        if (main_term - percentile) >= 0:  # Hyper-plane equation defined in the document
+            return -1  # Next node is the left child
         else:
-            if (main_term - percentile) >= 0:  # Hyper-plane equation defined in the document
-                return -1  # Next node is the left child
-            else:
-                return 1  # Next node is the right child
+            return 1  # Next node is the right child
+
+    def set_percentile(self):
+        scale_values = [np.inner(self.random_coefficients(), point[:self.indices].ravel()) for point in self.points]
+        percentile = np.percentile(scale_values, self.ratio * 100)
+        self.percentile = percentile
+        return True
 
     def random_coefficients(self):
-        return np.random.randint(2, size=self.indices)
+        return np.random.uniform(size=self.indices)
 
     def check_variables(self):
         if not all([Manager.is_digit(i) for i in [self.ratio, self.capacity, self.indices]]):
@@ -199,8 +237,8 @@ class InternalNode(object):
                 vec_dim = [vec.ndim for vec in self.points]  # Identifying whether or not passed data is a vector space
                 if vec_dim.count(vec_dim[0]) != len(vec_dim):
                     return ManagerError("every basis of vector space must be equal")
-        if not isinstance(self.node_position, list) and len(self.node_position) == 0:
-            return TreeError("previous position must be a list")
+        if not isinstance(self.parent, InternalNode) or isinstance(self.parent, RootNode):
+            return TreeError("parent node must be either InternalNode or RootNode instance")
 
 
 class Manager(object):
@@ -216,9 +254,9 @@ class Manager(object):
         indices - the number of indices used in the subspace projection in the random tests
         """
         self.vector_space = vector_space
-        self.tree_count = 100
+        self.tree_count = 30
         self.split_ratio = 1/2
-        self.capacity = 50
+        self.capacity = 12
         self.indices = 2
         self.random_forest = []
 
@@ -227,31 +265,32 @@ class Manager(object):
             self.index_space()
         return self.random_forest
 
-    def index_space(self):
+    def index_space(self):  # TODO: Improve tree creation performance even more
         shuffled_space = self.shuffle_space()
         current_tree = PartitionTree()
-        root_node = RootNode(self.vector_space, self.capacity, self.split_ratio, self.indices)
-        current_tree.root_node = root_node
-        current_tree.node_array.append(root_node)
-        position = list(root_node.node_position)  # Initial position
-        position.append(root_node.random_test(shuffled_space[0]))
-        for p in shuffled_space:  # Randomly pick feature vectors for partition
-            while True:
-                existent_node = self.node_exists(current_tree, position)
-                if isinstance(existent_node, InternalNode):  # If node already exists at a certain position
-                    current_node = existent_node
-                    current_node.add_point(p)
-                else:
-                    current_node = InternalNode(self.capacity, self.split_ratio, self.indices, position)
-                    current_node.add_point(p)
-                    current_tree.node_array.append(current_node)
-                if not current_node.is_leaf():
-                    random_test = current_node.random_test(p)
-                    position = position + [random_test]
-                else:
-                    position = [root_node.node_position[0],
-                                root_node.random_test(shuffled_space[0])]  # Reset position for next iteration
-                    break
+        level = 0  # Depth of the tree
+        root_node = RootNode(shuffled_space, self.capacity, self.split_ratio, self.indices)
+        node_array = {0: [root_node]}  # Dictionary containing array of every object at every level of the tree
+        while True:
+            current_nodes = node_array[level]
+            if all([node.is_leaf() for node in current_nodes]):  # If we hit the depth
+                break
+            else:
+                level += 1
+                node_array[level] = []  # Empty array to be filled at each level
+                for current_node in current_nodes:
+                    if not current_node.is_leaf():
+                        current_node.set_percentile()  # Bias that modifies hyper-plane according to split ratio
+                        left_child = InternalNode(self.capacity, self.split_ratio, self.indices, current_node, -1)
+                        right_child = InternalNode(self.capacity, self.split_ratio, self.indices, current_node, 1)
+                        for point in current_node.list_points():
+                            if current_node.random_test(point) == 1:  # If node should be a right child
+                                right_child.add_point(point)
+                            else:
+                                left_child.add_point(point)
+                        current_node.add_children(left_child, right_child)
+                        node_array[level].extend([left_child, right_child])  # Add children to the next level
+        current_tree.set_node_array(node_array)
         self.random_forest.append(current_tree)
         return current_tree
 
@@ -271,7 +310,7 @@ class Manager(object):
             raise ManagerError("split_ratio should be greater than 0 and less than 1/2")
 
     @staticmethod
-    def save_forest(forest_array, *file_path):
+    def save_forest(forest_array, *file_path):  # TODO: Implement more efficient method for saving large forest
         if all([isinstance(tree, PartitionTree) for tree in forest_array]):
             if not file_path:
                 current_path = os.path.dirname(os.path.abspath(__file__))
@@ -305,6 +344,12 @@ class Manager(object):
         else:
             return True
 
+    @staticmethod
+    def _append(_list, _item_list):
+        for _item in _item_list:
+            _list.append(_item)
+        return _list
+
 
 class Query(object):
     """
@@ -312,71 +357,45 @@ class Query(object):
     random_forest - Array full of PartitionTree objects
     """
     def __init__(self):
-        self.random_forest = []
+        self.partition_forest = []
 
-    def query(self, query_vector):
-        self.check_variables()
+    def import_forest(self, forest):
+        if self.verify_forest(forest):
+            self.partition_forest = forest
+        else:
+            raise QueryError("partition forest must contain PartitionTree objects only")
+
+    def search(self, query_vector):
         if isinstance(query_vector, np.ndarray):
-            if self.get_dimension(query_vector) == self.cardinality_of_basis():
-                results = np.asarray([])
-                for tree in self.random_forest:
-                    root_node = tree.show_root()
-                    position = list(root_node.node_position)  # Initial position
-                    position.append(root_node.random_test(query_vector))
-                    while True:
-                        current_node = self.get_node(tree.node_array, position)
-                        if not isinstance(current_node, InternalNode):  # If self.get_node just returns []
-                            break
-                        elif not current_node.is_leaf():
-                            position.append(current_node.random_test(query_vector))
-                        else:
-                            results = np.union1d(results, current_node.list_points())  # As stated in sections 3.3, 3.4
-                            break
-                return results
-            else:
-                raise QueryError("query vector must have cardinality equal to the dimension of inserted vector space")
+            results = []
+            for tree in self.partition_forest:
+                current_node = tree.root_node[0]
+                while not current_node.is_leaf():
+                    if current_node.random_test(query_vector) == 1:
+                        current_node = current_node.children[1]  # Right child
+                    else:
+                        current_node = current_node.children[0]  # Left child
+                for points in current_node.list_points():
+                    results.append(tuple(points.ravel().tolist()))  # TODO: improve speed by pre-setting
+            return set().union(results)  # TODO: find a faster way (maybe?)
         else:
-            raise QueryError("input for query method must be Numpy array")
-
-    def import_data_by_array(self, array):
-        self.random_forest = array
-        self.check_variables()
-
-    def import_data_by_pickle(self, file_path):
-        if os.path.exists(file_path):
-            if not os.path.splitext(file_path)[1] == ".p":
-                return ManagerError('file extension must be ".p"')
-            else:
-                with open(file_path, "r") as fl:
-                    parsed_data = pickle.loads(fl.read())
-                self.import_data_by_array(parsed_data)
-        else:
-            raise QueryError("pickle file does not exist at specified path")
-
-    def check_variables(self):
-        if len(self.random_forest) == 0:
-            raise QueryError("data must be imported first")
-        elif not all([isinstance(tree, PartitionTree) for tree in self.random_forest]):
-            raise QueryError("random_forest must be array full of PartitionTree objects")
-
-    def cardinality_of_basis(self):
-        if isinstance(self.random_forest, list) and len(self.random_forest) != 0:  # Double check
-            first_tree_root = self.random_forest[0].show_root()  # First root node is sufficient if rules are followed
-            return self.get_dimension(np.asarray(first_tree_root.space))
-        else:
-            raise QueryError("data must be imported first")
+            raise QueryError("query vector must be a numpy array")
 
     @staticmethod
-    def get_dimension(vector_space):  # Currently works, might need an upgrade in the future
-        ratio = vector_space.size / len(vector_space)
-        if ratio != 1:
-            return ratio
-        else:
-            return vector_space.size
+    def get_root(partition_forest):
+        return partition_forest.root_node
 
     @staticmethod
-    def get_node(node_array, position):
-        for node in node_array:
-            if node.node_position == position:
-                return node
-        return []
+    def verify_forest(forest):
+        if all([isinstance(tree, PartitionTree) for tree in forest]):
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def custom_union(results, node):
+        for point in node.list_points():
+            if point not in results:
+                results.append(point)
+        return results
+
