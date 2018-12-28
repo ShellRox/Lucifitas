@@ -60,7 +60,10 @@ class TestPartitionManager(unittest.TestCase):
         self.assertTrue(len(manager.random_forest), manager.tree_count)  # Forest must be the size of tree_count
 
     def test_query(self):
-        vector_space = np.asarray([np.random.rand(512, 1) for _ in range(0, 5000)])
+        """
+        Test if Polyhedral query results contains an optimal point given by Sequential query (rarely fails)
+        """
+        vector_space = np.asarray([np.random.rand(512, 1) for _ in range(0, 20000)])
         query_vector = np.random.rand(512, 1)
         manager = Manager(vector_space)
         manager.create_forest()
@@ -73,7 +76,9 @@ class TestPartitionManager(unittest.TestCase):
         t = time.time()
         polyhedral_results = polyhedral_query.search(query_vector)
         print("Polyhedral query took {0}".format(time.time() - t))
-        self.assertFalse(True)
+        polyhedral_results = list(polyhedral_results)
+        self.assertTrue(any([i for i in polyhedral_results
+                             if round(i[0], 2) == round(sequential_results[0][0], 2)]))  # rounded for precision
 
 
 if __name__ == '__main__':
